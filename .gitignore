@@ -1,0 +1,27 @@
+# Local builds and personal state
+.DS_Store
+.Build/
+.build/
+Build/
+build/
+work/
+dist/
+test-output/
+preview-output/
+*.app/
+*.dmg
+*.zip
+.env
+.env.*
+preferences.json
+last-result.json
+usage.json
+original-*
+# Credentials and signing material
+*.key
+*.pem
+*.p12
+*.pfx
+*.keychain*
+text-signing/
+build-signing.sh
