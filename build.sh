@@ -15,12 +15,17 @@ for ARCH in arm64 x86_64; do
 done
 lipo -create "$BUILD_DIR/Text-arm64" "$BUILD_DIR/Text-x86_64" -output "$APP/Contents/MacOS/Text"
 if [ -f "$SOURCE_DIR/Resources/AppIcon.icns" ]; then cp "$SOURCE_DIR/Resources/"* "$APP/Contents/Resources/"; fi
-SIGNING_CONFIG="$SOURCE_DIR/../text-signing/build-signing.sh"
-if [ -f "$SIGNING_CONFIG" ]; then source "$SIGNING_CONFIG"; fi
 if [ -n "${TEXT_SIGNING_IDENTITY:-}" ] && [ -n "${TEXT_SIGNING_KEYCHAIN:-}" ]; then
  python3 - "$APP" "$TEXT_SIGNING_IDENTITY" "$TEXT_SIGNING_KEYCHAIN" <<'PY_SIGN'
-import subprocess,sys,shlex
+import subprocess,sys,shlex,os
+from pathlib import Path
 app,identity,keychain=sys.argv[1:]
+password_file=os.environ.get('TEXT_SIGNING_PASSWORD_FILE')
+if password_file:
+ unlock=subprocess.run(['security','unlock-keychain','-p',Path(password_file).read_text(),keychain],capture_output=True,text=True)
+ if unlock.returncode:
+  print(unlock.stderr,file=sys.stderr)
+  raise SystemExit('Local signing keychain unlock failed.')
 original=shlex.split(subprocess.check_output(['security','list-keychains','-d','user'],text=True))
 try:
  subprocess.run(['security','list-keychains','-d','user','-s']+original+([keychain] if keychain not in original else []),check=True)

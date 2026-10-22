@@ -82,6 +82,9 @@ final class FixtureProtocol:URLProtocol {
             try check(try Imaging.render(doc.page(at:2)!).width>0,"扫描 PDF 第二页渲染")
             let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[FixtureProtocol.self];let api=CloudAPI(session:URLSession(configuration:config))
             let keys=Credentials(googleOCR:"fixture",googleTranslation:"fixture",baiduOCR:"fixture",baiduOCRSecret:"fixture",baiduAppID:"fixture",baiduTranslationSecret:"fixture")
+            let stored=try SecretStore.decoded(SecretStore.encoded(keys))
+            try check(stored.baiduOCR==keys.baiduOCR && stored.baiduTranslationSecret==keys.baiduTranslationSecret && stored.googleOCR==keys.googleOCR,"专用凭据记录完整往返编码")
+            do{_ = try SecretStore.decoded(JSONEncoder().encode(SecretStore.Record(version:99,credentials:keys)));throw TextError(message:"格式版本未检查")}catch{try check(error.localizedDescription=="不支持的凭据记录格式","拒绝未知版本且不覆盖凭据")}
             try check(SecretStore.pendingChanges(keys,previous:keys).isEmpty,"未修改密钥时不重复访问钥匙串保存")
             var changedKeys=keys;changedKeys.baiduTranslationSecret="changed"
             let pending=SecretStore.pendingChanges(changedKeys,previous:keys)

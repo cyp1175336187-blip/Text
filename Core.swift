@@ -9,33 +9,55 @@ struct TextError: LocalizedError {
     var errorDescription: String? { message }
     static let unconfigured = TextError(message:"尚未配置服务")
 }
-struct Credentials {
+struct Credentials:Codable {
     var googleOCR = "", googleTranslation = "", baiduOCR = "", baiduOCRSecret = "", baiduAppID = "", baiduTranslationSecret = ""
     func readyOCR(_ engine:String)->Bool { engine == "google" ? !googleOCR.isEmpty : !baiduOCR.isEmpty && !baiduOCRSecret.isEmpty }
     func readyTranslation(_ engine:String)->Bool { engine == "google" ? !googleTranslation.isEmpty : !baiduAppID.isEmpty && !baiduTranslationSecret.isEmpty }
 }
 enum SecretStore {
-    static let service="local.text.menubar.keys"
-    static func read(_ key:String)->String {
-        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:key,kSecReturnData as String:true,kSecMatchLimit as String:kSecMatchLimitOne]
-        var value:CFTypeRef?;guard SecItemCopyMatching(query as CFDictionary,&value)==errSecSuccess,let data=value as? Data else{return ""};return String(data:data,encoding:.utf8) ?? ""
+    // 新记录与旧 local.text.menubar.keys 完全隔离，不自动读取或删除旧条目。
+    static let service="local.text.menubar.credentials.v2",account="services"
+    static var lastLoadStatus:OSStatus=errSecSuccess
+    struct Record:Codable {let version:Int;let credentials:Credentials}
+    static func encoded(_ credentials:Credentials)throws->Data {try JSONEncoder().encode(Record(version:1,credentials:credentials))}
+    static func decoded(_ data:Data)throws->Credentials {let record=try JSONDecoder().decode(Record.self,from:data);guard record.version==1 else{throw TextError(message:"不支持的凭据记录格式")};return record.credentials}
+    static func query(keychain:SecKeychain?)->[String:Any]{
+        var q:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:account,kSecMatchLimit as String:kSecMatchLimitOne,kSecUseAuthenticationUI as String:kSecUseAuthenticationUIFail]
+        if let keychain{q[kSecMatchSearchList as String]=[keychain]};return q
     }
-    static func save(_ value:String,key:String)throws {
-        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:key]
-        if value.isEmpty {let code=SecItemDelete(query as CFDictionary);guard code==errSecSuccess || code==errSecItemNotFound else{throw TextError(message:"钥匙串删除失败（\(code)）")};return}
-        let data=Data(value.utf8);var code=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
-        if code==errSecItemNotFound {var item=query;item[kSecValueData as String]=data;item[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;code=SecItemAdd(item as CFDictionary,nil)}
-        guard code==errSecSuccess else{throw TextError(message:"钥匙串保存失败（\(code)）")}
+    static func load(keychain:SecKeychain?=nil)->Credentials {
+        // 旧式钥匙串 ACL 不一定遵循查询级 UI 标志；仅在本次读取期间禁止当前进程交互。
+        var interactionAllowed:DarwinBoolean=false
+        let interactionStatus=SecKeychainGetUserInteractionAllowed(&interactionAllowed)
+        guard interactionStatus==errSecSuccess else{lastLoadStatus=interactionStatus;return Credentials()}
+        let disableStatus=SecKeychainSetUserInteractionAllowed(false)
+        guard disableStatus==errSecSuccess else{lastLoadStatus=disableStatus;return Credentials()}
+        defer{SecKeychainSetUserInteractionAllowed(interactionAllowed.boolValue)}
+        var q=query(keychain:keychain);q[kSecReturnData as String]=true
+        var result:CFTypeRef?;lastLoadStatus=SecItemCopyMatching(q as CFDictionary,&result)
+        guard lastLoadStatus==errSecSuccess,let data=result as? Data else{return Credentials()}
+        do{return try decoded(data)}catch{lastLoadStatus=errSecDecode;return Credentials()}
     }
     static let names=["googleOCR","googleTranslation","baiduOCR","baiduOCRSecret","baiduAppID","baiduTranslationSecret"]
-    static func load()->Credentials { Credentials(googleOCR:read(names[0]),googleTranslation:read(names[1]),baiduOCR:read(names[2]),baiduOCRSecret:read(names[3]),baiduAppID:read(names[4]),baiduTranslationSecret:read(names[5])) }
     static func pendingChanges(_ c:Credentials,previous:Credentials?)->[(String,String)] {
         let values=[c.googleOCR,c.googleTranslation,c.baiduOCR,c.baiduOCRSecret,c.baiduAppID,c.baiduTranslationSecret].map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}
         let old=previous.map{[$0.googleOCR,$0.googleTranslation,$0.baiduOCR,$0.baiduOCRSecret,$0.baiduAppID,$0.baiduTranslationSecret]}
         return names.indices.compactMap{i in if let old,old[i]==values[i]{return nil};return (names[i],values[i])}
     }
-    static func saveAll(_ c:Credentials,previous:Credentials?=nil)throws {for (key,value) in pendingChanges(c,previous:previous){try save(value,key:key)}}
+    static func saveAll(_ c:Credentials,previous:Credentials?=nil,keychain:SecKeychain?=nil)throws {
+        if previous != nil && pendingChanges(c,previous:previous).isEmpty{return}
+        let data=try encoded(c);var q=query(keychain:keychain);q[kSecReturnRef as String]=true
+        var ref:CFTypeRef?;var status=SecItemCopyMatching(q as CFDictionary,&ref)
+        if status==errSecItemNotFound {
+            // 使用当前签名身份创建受保护的 macOS 专用记录，不放宽为所有应用可访问。
+            status=data.withUnsafeBytes{bytes in guard let pointer=bytes.baseAddress else{return errSecParam};return SecKeychainAddGenericPassword(keychain,UInt32(service.utf8.count),service,UInt32(account.utf8.count),account,UInt32(data.count),pointer,nil)}
+        }else if status==errSecSuccess,let ref {
+            status=data.withUnsafeBytes{bytes in SecKeychainItemModifyAttributesAndData((ref as! SecKeychainItem),nil,UInt32(data.count),bytes.baseAddress)}
+        }
+        guard status==errSecSuccess else{throw TextError(message:"Text 专用凭据保存失败（\(status)）。旧密钥记录未改动。")}
+    }
 }
+
 struct Shortcut:Codable,Equatable {
     var code:UInt32, flags:UInt, key:String
     static let capture=Shortcut(code:18,flags:NSEvent.ModifierFlags.command.rawValue,key:"1")

@@ -5,6 +5,7 @@ MainActor.assumeIsolated {
     if let i=args.firstIndex(of:"--make-icons"),args.count>i+1 {do{try AppArtwork.makeIcons(URL(fileURLWithPath:args[i+1]));exit(0)}catch{fputs(error.localizedDescription,stderr);exit(1)}}
     if let i=args.firstIndex(of:"--render-previews"),args.count>i+1{do{try SelfTests.render(URL(fileURLWithPath:args[i+1]));exit(0)}catch{fputs(error.localizedDescription,stderr);exit(1)}}
     if let i=args.firstIndex(of:"--self-test"),args.count>i+1 {Task{@MainActor in let code=await SelfTests.run(URL(fileURLWithPath:args[i+1]));exit(code)};RunLoop.main.run();exit(1)}
+    if args.contains("--check-credentials") {let keys=SecretStore.load();print("keychainStatus=\(SecretStore.lastLoadStatus) ocrConfigured=\(keys.readyOCR("baidu")) translationConfigured=\(keys.readyTranslation("baidu"))");exit(0)}
     do {
         var testRoot:URL?
         if let i=args.firstIndex(of:"--test-root"),args.count>i+1{testRoot=URL(fileURLWithPath:args[i+1])}

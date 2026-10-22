@@ -61,7 +61,7 @@ import Carbon
         results=ResultsController(state:state);results.anchor={[weak self] in guard let b=self?.statusItem.button,let w=b.window else{return .zero};return w.convertToScreen(b.convert(b.bounds,to:nil))}
         preferences=PreferencesController(state:state);preferences.onIcon={style in NSApp.applicationIconImage=AppArtwork.icon(style:style,size:256)};preferences.onHotkeys={[weak self] in self?.registerHotkeys()};preferences.onRecording={[weak self] active in self?.recording=active;self?.registerHotkeys()}
         state.onChange={[weak self] in self?.updateRecognitionIcon();self?.results.refresh();self?.preferences.refreshStatus()};state.onShow={[weak self] in self?.results.show()};state.onSettings={[weak self] in self?.preferences.show("account")};registerHotkeys()
-        if Bundle.main.bundleIdentifier?.hasSuffix(".uitest")==true{preferences.show()}else if CommandLine.arguments.contains("--show"){results.show()}
+        if CommandLine.arguments.contains("--show-account"){preferences.show("account")}else if Bundle.main.bundleIdentifier?.hasSuffix(".uitest")==true{preferences.show()}else if CommandLine.arguments.contains("--show"){results.show()}
     }
     func restoreMenuIcon(){recognitionTimer?.invalidate();recognitionTimer=nil;recognitionCompletedAt=nil;recognitionDisplayed=0;statusItem?.button?.title="";statusItem?.button?.image=AppArtwork.menuMonogram()}
     func updateRecognitionIcon(){
